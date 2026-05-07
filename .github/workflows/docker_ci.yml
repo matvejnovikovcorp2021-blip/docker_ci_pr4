@@ -48,6 +48,84 @@ jobs:
 
       - name: Build and push Docker image with docker-compose
         run: |
-          docker compose build
-          docker tag myapp:latest ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/myapp:${{ github.sha }} .
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/myapp:${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/myapp --all-tags
+
+  deploy-to-kubernetes:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install K3s and deploy
+        uses: k3s-io/k3s-action@v2
+        with:
+          command: |
+            # Создаём папку для манифестов, если её нет
+            mkdir -p k8s
+            
+            # Создаём deployment.yaml
+            cat <<EOF > k8s/deployment.yaml
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: myapp-deployment
+              labels:
+                app: myapp
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: myapp
+              template:
+                metadata:
+                  labels:
+                    app: myapp
+                spec:
+                  containers:
+                  - name: myapp
+                    image: ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
+                    ports:
+                    - containerPort: 5000
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 5000
+                      initialDelaySeconds: 5
+                      periodSeconds: 5
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 5000
+                      initialDelaySeconds: 15
+                      periodSeconds: 20
+            EOF
+            
+            # Создаём service.yaml
+            cat <<EOF > k8s/service.yaml
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: myapp-service
+            spec:
+              selector:
+                app: myapp
+              ports:
+              - port: 80
+                targetPort: 5000
+              type: ClusterIP
+            EOF
+            
+            # Применяем манифесты
+            kubectl apply -f k8s/deployment.yaml
+            kubectl apply -f k8s/service.yaml
+            
+            # Проверяем статус
+            kubectl get pods
+            kubectl get svc
+            
+            # Ждём готовности деплоймента
+            kubectl rollout status deployment/myapp-deployment --timeout=120s
