@@ -48,6 +48,6 @@ jobs:
 
       - name: Build and push Docker image with docker-compose
         run: |
-          docker-compose build
+          docker compose build
           docker tag myapp:latest ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
