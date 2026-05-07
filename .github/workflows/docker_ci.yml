@@ -60,72 +60,71 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install K3s and deploy
-        uses: k3s-io/k3s-action@v2
-        with:
-          command: |
-            # Создаём папку для манифестов, если её нет
-            mkdir -p k8s
-            
-            # Создаём deployment.yaml
-            cat <<EOF > k8s/deployment.yaml
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: myapp-deployment
-              labels:
+      - name: Install kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Install K3s and setup kubeconfig
+        run: |
+          curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
+          sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+          mkdir -p $HOME/.kube
+          sudo cp /etc/rancher/k3s/k3s.yaml $HOME/.kube/config
+          sudo chown $(id -u):$(id -g) $HOME/.kube/config
+          export KUBECONFIG=$HOME/.kube/config
+
+      - name: Deploy to Kubernetes
+        run: |
+          export KUBECONFIG=$HOME/.kube/config
+          
+          # Создаём манифесты
+          cat <<EOF > deployment.yaml
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: myapp-deployment
+            labels:
+              app: myapp
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
                 app: myapp
-            spec:
-              replicas: 2
-              selector:
-                matchLabels:
+            template:
+              metadata:
+                labels:
                   app: myapp
-              template:
-                metadata:
-                  labels:
-                    app: myapp
-                spec:
-                  containers:
-                  - name: myapp
-                    image: ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
-                    ports:
-                    - containerPort: 5000
-                    readinessProbe:
-                      httpGet:
-                        path: /
-                        port: 5000
-                      initialDelaySeconds: 5
-                      periodSeconds: 5
-                    livenessProbe:
-                      httpGet:
-                        path: /
-                        port: 5000
-                      initialDelaySeconds: 15
-                      periodSeconds: 20
-            EOF
-            
-            # Создаём service.yaml
-            cat <<EOF > k8s/service.yaml
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: myapp-service
-            spec:
-              selector:
-                app: myapp
-              ports:
-              - port: 80
-                targetPort: 5000
-              type: ClusterIP
-            EOF
-            
-            # Применяем манифесты
-            kubectl apply -f k8s/deployment.yaml
-            kubectl apply -f k8s/service.yaml
-            
-            # Проверяем статус
-            kubectl get pods
-            kubectl get svc
-            
-            # Ждём готовности деплоймента
-            kubectl rollout status deployment/myapp-deployment --timeout=120s
+              spec:
+                containers:
+                - name: myapp
+                  image: ${{ secrets.DOCKERHUB_USERNAME }}/myapp:latest
+                  ports:
+                  - containerPort: 5000
+          EOF
+          
+          cat <<EOF > service.yaml
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: myapp-service
+          spec:
+            selector:
+              app: myapp
+            ports:
+            - port: 80
+              targetPort: 5000
+            type: ClusterIP
+          EOF
+          
+          # Применяем манифесты
+          kubectl apply -f deployment.yaml
+          kubectl apply -f service.yaml
+          
+          # Проверяем статус
+          kubectl get pods
+          kubectl get svc
+          
+          # Ждём готовности
+          kubectl rollout status deployment/myapp-deployment --timeout=120s
